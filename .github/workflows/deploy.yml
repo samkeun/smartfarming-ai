@@ -23,4 +23,4 @@ jobs:
 
       - name: Deploy to EC2
         run: |
-          ssh -vvv -i smartfarming-live.pem -o StrictHostKeyChecking=no ubuntu@smartfarming-live.s3.ap-northeast-2.amazonaws.com 'cd smartfarming-ai && git pull origin main && yarn install && yarn build && pm2 restart all'
+          ssh -vvv -i smartfarming-live.pem -o StrictHostKeyChecking=no ubuntu@ec2-15-164-166-140.ap-northeast-2.compute.amazonaws.com 'cd smartfarming-ai && git pull origin main && yarn install && yarn build && pm2 restart all'
