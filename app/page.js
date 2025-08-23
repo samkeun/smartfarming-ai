@@ -22,7 +22,7 @@ export default function Home() {
                         {/* Get Started Button */} 
                         <div className="flex justify-center mb-8"> 
                             <Link href="/dashboard" className="btn btn-primary gap-2"> 
-                                병해충 탐지
+                                🔎 병해충 탐지
                             </Link> 
                         </div> 
                         
