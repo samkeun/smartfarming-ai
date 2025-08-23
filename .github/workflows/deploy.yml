@@ -1,0 +1,26 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install SSH key
+        run: |
+          echo "${{ secrets.EC2_PEM_KEY }}" | tr -d '\r' > smartfarming-live.pem
+          chmod 400 smartfarming-live.pem
+
+      - name: Verify SSH key creation
+        run: ls -l smartfarming-live.pem
+
+      - name: Deploy to EC2
+        run: |
+          ssh -vvv -i smartfarming-live.pem -o StrictHostKeyChecking=no ubuntu@smartfarming-live.s3.ap-northeast-2.amazonaws.com 'cd smartfarming-ai && git pull origin main && yarn install && yarn build && pm2 restart all'
