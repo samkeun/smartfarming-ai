@@ -12,6 +12,7 @@ const nextConfig = {
     return [
       {
         source: '/(.*)',
+        output: 'standalone', // PM2로 구동하기 좋게 최소 실행 번들 생성
         headers: [
           {
             key: 'Content-Security-Policy',
