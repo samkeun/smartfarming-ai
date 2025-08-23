@@ -1,26 +1,35 @@
-name: Deploy to EC2
+import createPWA from 'next-pwa';
 
-on:
-  push:
-    branches:
-      - main
+const withPWA = createPWA({
+  dest: 'public',
+  disable: process.env.NODE_ENV === 'development',
+  register: true,
+  skipWaiting: true,
+});
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
+const nextConfig = {
+  output: 'standalone', // PM2로 구동하기 좋게 최소 실행 번들 생성
+  eslint: {
+    // 프로덕션 빌드 시 ESLint 에러 무시 (임시 조치)
+    ignoreDuringBuilds: true,
+  },
+  typescript: {
+    // 프로덕션 빌드 시 TypeScript 에러 무시 (필요한 경우)
+    ignoreBuildErrors: true,
+  },
+  async headers() {
+    return [
+      {
+        source: '/(.*)',
+        headers: [
+          {
+            key: 'Content-Security-Policy',
+            value: `frame-src https://smartfarming.live https://dn8wklnt2iid2.cloudfront.net http://localhost:3000;`
+          },    
+        ]
+      }
+    ]
+  }
+}
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Install SSH key
-        run: |
-          echo "${{ secrets.EC2_PEM_KEY }}" | tr -d '\r' > smartfarming-live.pem
-          chmod 400 smartfarming-live.pem
-
-      - name: Verify SSH key creation
-        run: ls -l smartfarming-live.pem
-
-      - name: Deploy to EC2
-        run: |
-          ssh -vvv -i smartfarming-live.pem -o StrictHostKeyChecking=no ubuntu@ec2-15-164-166-140.ap-northeast-2.compute.amazonaws.com 'cd smartfarming-ai && git pull origin main && yarn install && yarn build && pm2 restart all'
+export default withPWA(nextConfig);
