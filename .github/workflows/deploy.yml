@@ -8,7 +8,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 59
     
     env:
       EC2_HOST: ec2-15-164-166-140.ap-northeast-2.compute.amazonaws.com
