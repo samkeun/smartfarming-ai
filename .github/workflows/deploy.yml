@@ -1,4 +1,4 @@
-name: Deploy to EC2
+name: Deploy to EC2 (skimok)
 
 on:
   push:
@@ -19,50 +19,94 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Install SSH key
+      # AWS 자격 증명 디버깅 (임시)
+      - name: Debug AWS Credentials
         run: |
-          echo "${{ secrets.EC2_PEM_KEY }}" | tr -d '\r' > smartfarming-live.pem
-          chmod 400 smartfarming-live.pem
-
-      - name: Deploy to EC2 via SSH
-        run: |
-          # SSH 연결 테스트
-          echo "Testing SSH connection..."
-          ssh -i smartfarming-live.pem \
-              -o StrictHostKeyChecking=no \
-              -o ConnectTimeout=30 \
-              ${{ env.EC2_USER }}@${{ env.EC2_HOST }} \
-              "echo 'SSH connection successful'"
+          echo "Checking if AWS credentials are set..."
+          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
+            echo "ERROR: AWS_ACCESS_KEY_ID is not set in GitHub Secrets"
+            exit 1
+          else
+            echo "✓ AWS_ACCESS_KEY_ID is set"
+            echo "Key starts with: ${AWS_KEY:0:4}..."
+          fi
           
-          # 실제 배포
-          echo "Starting deployment..."
-          ssh -i smartfarming-live.pem \
-              -o StrictHostKeyChecking=no \
-              -o ConnectTimeout=30 \
-              -o ServerAliveInterval=60 \
-              -o ServerAliveCountMax=3 \
-              ${{ env.EC2_USER }}@${{ env.EC2_HOST }} \
-              "cd ${{ env.PROJECT_DIR }} && \
-               echo '1. Pulling latest code...' && \
-               git pull origin main && \
-               echo '2. Creating .env file...' && \
-               cat > .env << 'EOF'
-          DATABASE_URL=${{ secrets.DATABASE_URL }}
-          NEXT_PUBLIC_DATABASE_URL=${{ secrets.NEXT_PUBLIC_DATABASE_URL }}
-          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
-          CLERK_SECRET_KEY=${{ secrets.CLERK_SECRET_KEY }}
-          NEXT_PUBLIC_CLERK_SIGN_IN_URL=${{ secrets.NEXT_PUBLIC_CLERK_SIGN_IN_URL }}
-          NEXT_PUBLIC_CLERK_SIGN_UP_URL=${{ secrets.NEXT_PUBLIC_CLERK_SIGN_UP_URL }}
-          NEXT_PUBLIC_REPLICATE_API_TOKEN=${{ secrets.NEXT_PUBLIC_REPLICATE_API_TOKEN }}
-          NEXT_PUBLIC_PAYPAL_CLIENT_ID=${{ secrets.NEXT_PUBLIC_PAYPAL_CLIENT_ID }}
-          EOF
-               echo '3. Installing dependencies...' && \
-               yarn install && \
-               echo '4. Building application...' && \
-               source .env && \
-               NODE_OPTIONS='--max-old-space-size=2048' yarn build && \
-               echo '5. Restarting PM2...' && \
-               pm2 restart all && \
-               echo '6. Checking status...' && \
-               pm2 status && \
-               echo 'Deployment completed successfully!'"
+          if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "ERROR: AWS_SECRET_ACCESS_KEY is not set in GitHub Secrets"
+            exit 1
+          else
+            echo "✓ AWS_SECRET_ACCESS_KEY is set"
+          fi
+        env:
+          AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+
+      # 옵션 1: AWS CLI 직접 설정 (configure-aws-credentials 대신)
+      - name: Setup AWS CLI manually
+        run: |
+          aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws configure set default.region ap-northeast-2
+          
+          # 자격 증명 테스트
+          aws sts get-caller-identity
+
+      # 옵션 2: configure-aws-credentials v4 사용 (최신 버전)
+      # - name: Configure AWS credentials
+      #   uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      #     aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      #     aws-region: ap-northeast-2
+
+      # 옵션 3: 환경 변수로 직접 설정
+      # - name: Set AWS Credentials
+      #   env:
+      #     AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      #     AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      #     AWS_DEFAULT_REGION: ap-northeast-2
+      #   run: |
+      #     aws sts get-caller-identity
+
+      - name: Get Instance ID
+        id: get-instance
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=ip-address,Values=15.164.166.140" \
+            --query "Reservations[0].Instances[0].InstanceId" \
+            --output text)
+          
+          if [ "$INSTANCE_ID" = "None" ] || [ -z "$INSTANCE_ID" ]; then
+            echo "ERROR: Could not find instance with IP 15.164.166.140"
+            echo "Trying with private IP..."
+            INSTANCE_ID=$(aws ec2 describe-instances \
+              --filters "Name=private-ip-address,Values=172.31.46.195" \
+              --query "Reservations[0].Instances[0].InstanceId" \
+              --output text)
+          fi
+          
+          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "Found instance: $INSTANCE_ID"
+
+      - name: Deploy using SSM
+        run: |
+          aws ssm send-command \
+            --instance-ids "${{ steps.get-instance.outputs.instance_id }}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=[
+              "cd /home/ubuntu/smartfarming-ai",
+              "git pull origin main",
+              "cat > .env << EOF",
+              "DATABASE_URL=${{ secrets.DATABASE_URL }}",
+              "NEXT_PUBLIC_DATABASE_URL=${{ secrets.NEXT_PUBLIC_DATABASE_URL }}",
+              "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}",
+              "CLERK_SECRET_KEY=${{ secrets.CLERK_SECRET_KEY }}",
+              "NEXT_PUBLIC_CLERK_SIGN_IN_URL=${{ secrets.NEXT_PUBLIC_CLERK_SIGN_IN_URL }}",
+              "NEXT_PUBLIC_CLERK_SIGN_UP_URL=${{ secrets.NEXT_PUBLIC_CLERK_SIGN_UP_URL }}",
+              "NEXT_PUBLIC_REPLICATE_API_TOKEN=${{ secrets.NEXT_PUBLIC_REPLICATE_API_TOKEN }}",
+              "NEXT_PUBLIC_PAYPAL_CLIENT_ID=${{ secrets.NEXT_PUBLIC_PAYPAL_CLIENT_ID }}",
+              "EOF",
+              "source .env",
+              "yarn install",
+              "NODE_OPTIONS=\"--max-old-space-size=2048\" yarn build",
+              "pm2 restart all"
+            ]'
