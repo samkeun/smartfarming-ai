@@ -1,91 +1,69 @@
-name: Deploy to EC2
+name: Deploy via AWS Systems Manager
 
 on:
   push:
     branches:
       - main
-  workflow_dispatch: # 수동 실행 가능
-
-# 워크플로우 전체에서 사용할 환경 변수
-env:
-  NODE_VERSION: '22'
-  AWS_REGION: 'ap-northeast-2'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     
-    # Job 레벨 환경 변수
-    env:
-      EC2_HOST: ec2-15-164-166-140.ap-northeast-2.compute.amazonaws.com
-      EC2_USER: ubuntu
-      PROJECT_DIR: smartfarming-ai
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Install SSH key
-        run: |
-          echo "${{ secrets.EC2_PEM_KEY }}" | tr -d '\r' > smartfarming-live.pem
-          chmod 400 smartfarming-live.pem
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-2
 
-      # # 방법 1: EC2에 .env 파일 생성
-      # - name: Create .env file on EC2
-      #   run: |
-      #     ssh -i smartfarming-live.pem \
-      #         -o StrictHostKeyChecking=no \
-      #         -o ConnectTimeout=30 \
-      #         -o ServerAliveInterval=60 \
-      #         ${{ env.EC2_USER }}@${{ env.EC2_HOST }} \
-      #         "cd ${{ env.PROJECT_DIR }} && \
-      #          cat > .env << 'EOF'
-      #     DATABASE_URL=${{ secrets.DATABASE_URL }}
-      #     NEXT_PUBLIC_DATABASE_URL=${{ secrets.NEXT_PUBLIC_DATABASE_URL }}
-      #     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
-      #     CLERK_SECRET_KEY=${{ secrets.CLERK_SECRET_KEY }}
-      #     NEXT_PUBLIC_CLERK_SIGN_IN_URL=${{ secrets.NEXT_PUBLIC_CLERK_SIGN_IN_URL }}
-      #     NEXT_PUBLIC_CLERK_SIGN_UP_URL=${{ secrets.NEXT_PUBLIC_CLERK_SIGN_UP_URL }}
-      #     NEXT_PUBLIC_REPLICATE_API_TOKEN=${{ secrets.NEXT_PUBLIC_REPLICATE_API_TOKEN }}
-      #     NEXT_PUBLIC_PAYPAL_CLIENT_ID=${{ secrets.NEXT_PUBLIC_PAYPAL_CLIENT_ID }}
-      #     NODE_ENV=production
-      #     PORT=3000
-      #     EOF"
-
-      # 방법 2: 환경 변수를 직접 export하여 실행
-      - name: Deploy with environment variables
-        env:
-          # Step 레벨 환경 변수
-          BUILD_COMMAND: "yarn build"
-          START_COMMAND: "pm2 restart all"
+      - name: Get Instance ID
+        id: get-instance
         run: |
-          ssh -i smartfarming-live.pem \
-              -o StrictHostKeyChecking=no \
-              ${{ env.EC2_USER }}@${{ env.EC2_HOST }} \
-              "cd ${{ env.PROJECT_DIR }} && \
-               git pull origin main && \
-               yarn install && \
-               export DATABASE_URL='${{ secrets.DATABASE_URL }}' && \
-               export NEXT_PUBLIC_DATABASE_URL='${{ secrets.NEXT_PUBLIC_DATABASE_URL }}' && \
-               export NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY='${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}' && \
-               export CLERK_SECRET_KEY='${{ secrets.CLERK_SECRET_KEY }}' && \
-               export NEXT_PUBLIC_CLERK_SIGN_IN_URL='${{ secrets.NEXT_PUBLIC_CLERK_SIGN_IN_URL }}' && \
-               export NEXT_PUBLIC_CLERK_SIGN_UP_URL='${{ secrets.NEXT_PUBLIC_CLERK_SIGN_UP_URL }}' && \
-               export NEXT_PUBLIC_REPLICATE_API_TOKEN='${{ secrets.NEXT_PUBLIC_REPLICATE_API_TOKEN }}' && \
-               export NEXT_PUBLIC_PAYPAL_CLIENT_ID='${{ secrets.NEXT_PUBLIC_PAYPAL_CLIENT_ID }}' && \
-               export NODE_OPTIONS='--max-old-space-size=2048' && \
-               ${{ env.BUILD_COMMAND }} && \
-               ${{ env.START_COMMAND }}"
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=ip-address,Values=15.164.166.140" \
+            --query "Reservations[0].Instances[0].InstanceId" \
+            --output text)
+          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "Found instance: $INSTANCE_ID"
 
-      # 상태 확인
-      - name: Check deployment status
-        if: always() # 항상 실행
+      - name: Deploy using SSM
         run: |
-          ssh -i smartfarming-live.pem \
-              -o StrictHostKeyChecking=no \
-              ${{ env.EC2_USER }}@${{ env.EC2_HOST }} \
-              "cd ${{ env.PROJECT_DIR }} && \
-               pm2 status && \
-               echo '=== Recent PM2 Logs ===' && \
-               pm2 logs --lines 10 --nostream"
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "${{ steps.get-instance.outputs.instance_id }}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=[
+              "cd /home/ubuntu/smartfarming-ai",
+              "git pull origin main",
+              "cat > .env << EOF",
+              "DATABASE_URL=${{ secrets.DATABASE_URL }}",
+              "NEXT_PUBLIC_DATABASE_URL=${{ secrets.NEXT_PUBLIC_DATABASE_URL }}",
+              "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}",
+              "CLERK_SECRET_KEY=${{ secrets.CLERK_SECRET_KEY }}",
+              "NEXT_PUBLIC_CLERK_SIGN_IN_URL=${{ secrets.NEXT_PUBLIC_CLERK_SIGN_IN_URL }}",
+              "NEXT_PUBLIC_CLERK_SIGN_UP_URL=${{ secrets.NEXT_PUBLIC_CLERK_SIGN_UP_URL }}",
+              "NEXT_PUBLIC_REPLICATE_API_TOKEN=${{ secrets.NEXT_PUBLIC_REPLICATE_API_TOKEN }}",
+              "NEXT_PUBLIC_PAYPAL_CLIENT_ID=${{ secrets.NEXT_PUBLIC_PAYPAL_CLIENT_ID }}",
+              "EOF",
+              "source .env",
+              "yarn install",
+              "NODE_OPTIONS=\"--max-old-space-size=2048\" yarn build",
+              "pm2 restart all"
+            ]' \
+            --query "Command.CommandId" \
+            --output text)
+          
+          echo "Command ID: $COMMAND_ID"
+          
+          # Wait for command to complete
+          aws ssm wait command-executed \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${{ steps.get-instance.outputs.instance_id }}"
+          
+          # Get command output
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${{ steps.get-instance.outputs.instance_id }}"
