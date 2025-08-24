@@ -8,7 +8,6 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -19,35 +18,27 @@ jobs:
           echo "${{ secrets.EC2_PEM_KEY }}" | tr -d '\r' > smartfarming-live.pem
           chmod 400 smartfarming-live.pem
 
+      - name: Verify SSH key creation
+        run: ls -l smartfarming-live.pem
+
+      - name: Setting Environment Variables
+        run: |
+          echo "NEXT_PUBLIC_DATABASE_URL=$NEXT_PUBLIC_DATABASE_URL" >> .env
+          echo "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY" >> .env
+          echo "CLERK_SECRET_KEY=$CLERK_SECRET_KEY" >> .env
+          echo "NEXT_PUBLIC_CLERK_SIGN_IN_URL=$NEXT_PUBLIC_CLERK_SIGN_IN_URL" >> .env
+          echo "NEXT_PUBLIC_CLERK_SIGN_UP_URL=$NEXT_PUBLIC_CLERK_SIGN_UP_URL" >> .env
+          echo "NEXT_PUBLIC_REPLICATE_API_TOKEN=$NEXT_PUBLIC_REPLICATE_API_TOKEN" >> .env
+          echo "NEXT_PUBLIC_PAYPAL_CLIENT_ID=$NEXT_PUBLIC_PAYPAL_CLIENT_ID" >> .env
+        env:
+          NEXT_PUBLIC_DATABASE_URL: ${{ secrets.NEXT_PUBLIC_DATABASE_URL }}        
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}        
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}        
+          NEXT_PUBLIC_CLERK_SIGN_IN_URL: ${{ secrets.NEXT_PUBLIC_CLERK_SIGN_IN_URL }}        
+          NEXT_PUBLIC_CLERK_SIGN_UP_URL: ${{ secrets.NEXT_PUBLIC_CLERK_SIGN_UP_URL }}        
+          NEXT_PUBLIC_REPLICATE_API_TOKEN: ${{ secrets.NEXT_PUBLIC_REPLICATE_API_TOKEN }}        
+          NEXT_PUBLIC_PAYPAL_CLIENT_ID: ${{ secrets.NEXT_PUBLIC_PAYPAL_CLIENT_ID }}            
+
       - name: Deploy to EC2
         run: |
-          ssh -i smartfarming-live.pem \
-              -o StrictHostKeyChecking=no \
-              -o ConnectTimeout=30 \
-              -o ServerAliveInterval=60 \
-              ubuntu@ec2-15-164-166-140.ap-northeast-2.compute.amazonaws.com \
-              'cd smartfarming-ai && \
-               git pull origin main && \
-               echo "Creating .env file..." && \
-               cat > .env << EOF
-          DATABASE_URL=${{ secrets.DATABASE_URL }}
-          NEXT_PUBLIC_DATABASE_URL=${{ secrets.NEXT_PUBLIC_DATABASE_URL }}
-          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
-          CLERK_SECRET_KEY=${{ secrets.CLERK_SECRET_KEY }}
-          NEXT_PUBLIC_CLERK_SIGN_IN_URL=${{ secrets.NEXT_PUBLIC_CLERK_SIGN_IN_URL }}
-          NEXT_PUBLIC_CLERK_SIGN_UP_URL=${{ secrets.NEXT_PUBLIC_CLERK_SIGN_UP_URL }}
-          NEXT_PUBLIC_REPLICATE_API_TOKEN=${{ secrets.NEXT_PUBLIC_REPLICATE_API_TOKEN }}
-          NEXT_PUBLIC_PAYPAL_CLIENT_ID=${{ secrets.NEXT_PUBLIC_PAYPAL_CLIENT_ID }}
-          EOF
-               echo "Verifying environment variables..." && \
-               if grep -q "DATABASE_URL" .env; then \
-                 echo "✓ DATABASE_URL is set"; \
-               else \
-                 echo "✗ DATABASE_URL is missing!" && exit 1; \
-               fi && \
-               echo "Starting build process..." && \
-               yarn install && \
-               NODE_OPTIONS="--max-old-space-size=2048" yarn build && \
-               echo "Build completed. Restarting PM2..." && \
-               pm2 restart all && \
-               pm2 status'
+          ssh -vvv -i smartfarming-live.pem -o StrictHostKeyChecking=no ubuntu@ec2-15-164-166-140.ap-northeast-2.compute.amazonaws.com 'cd smartfarming-ai && git pull origin main && yarn install && yarn build && pm2 restart all'
