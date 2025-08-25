@@ -41,10 +41,12 @@ jobs:
               -o ConnectTimeout=30 \
               -o ServerAliveInterval=60 \
               -o ServerAliveCountMax=3 \
-              ${{ env.EC2_USER }}@${{ env.EC2_HOST }} \
-              "cd ${{ env.PROJECT_DIR }} && \
-               git pull origin main && \
-               cat > .env << 'EOF'
+              ${{ env.EC2_USER }}@${{ env.EC2_HOST }} << 'ENDSSH'
+          cd ${{ env.PROJECT_DIR }}
+          git pull origin main
+          
+          # Create .env file
+          cat > .env << 'EOF'
           DATABASE_URL=${{ secrets.DATABASE_URL }}
           NEXT_PUBLIC_DATABASE_URL=${{ secrets.NEXT_PUBLIC_DATABASE_URL }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
@@ -54,17 +56,22 @@ jobs:
           NEXT_PUBLIC_REPLICATE_API_TOKEN=${{ secrets.NEXT_PUBLIC_REPLICATE_API_TOKEN }}
           NEXT_PUBLIC_PAYPAL_CLIENT_ID=${{ secrets.NEXT_PUBLIC_PAYPAL_CLIENT_ID }}
           EOF
-               echo '.env file created successfully' && \
-               yarn install && \
-               source .env && \
-               NODE_OPTIONS='--max-old-space-size=2048' yarn build && \
-               # PM2 프로세스 확인 및 시작/재시작
-               if pm2 list | grep -q '${{ env.APP_NAME }}'; then \
-                 echo 'Restarting existing PM2 process...' && \
-                 pm2 restart ${{ env.APP_NAME }}; \
-               else \
-                 echo 'Starting new PM2 process...' && \
-                 pm2 start yarn --name ${{ env.APP_NAME }} -- start; \
-               fi && \
-               pm2 save && \
-               pm2 status"
+          
+          echo '.env file created successfully'
+          
+          # Install dependencies
+          yarn install
+          
+          # Build the application
+          source .env
+          NODE_OPTIONS='--max-old-space-size=2048' yarn build
+          
+          # PM2 처리 - 백그라운드에서 실행
+          echo 'Managing PM2 process...'
+          pm2 delete ${{ env.APP_NAME }} 2>/dev/null || true
+          pm2 start yarn --name ${{ env.APP_NAME }} -- start
+          pm2 save --force
+          pm2 list
+          
+          echo 'Deployment completed successfully!'
+          ENDSSH
